@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Нора — кръвна захар и инсулин</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
+<style>
+  :root {
+    --bg: #2b2b2b;
+    --panel: #333333;
+    --ink: #ffffff;
+    --ink-dim: #a8a8a8;
+    --grid: rgba(255,255,255,0.10);
+    --daysplit: rgba(255,255,255,0.26);
+    --dayband: rgba(255,255,255,0.035);
+    --glucose: #e03131;
+    --insulin: #3d7fd6;
+    --food: #d9a441;
+    --targetfill: rgba(76,168,106,0.13);
+    --targetline: rgba(118,204,146,0.55);
+    --outfill: rgba(196,84,84,0.13);
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "Segoe UI", Roboto, system-ui, sans-serif;
+  }
+  .wrap {
+    max-width: 1600px;
+    margin: 0 auto;
+    padding: 22px 20px 40px;
+  }
+  h1 {
+    font-size: 21px;
+    font-weight: 500;
+    margin: 0 0 4px;
+  }
+  .sub {
+    color: var(--ink-dim);
+    font-size: 14px;
+    margin: 0 0 16px;
+  }
+  .chart-box {
+    position: relative;
+    height: clamp(340px, 72dvh, 700px);
+    background: var(--panel);
+    border: 1px solid rgba(255,255,255,0.10);
+    padding: 10px 12px 12px;
+  }
+  .controls {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin: 12px 0 0;
+    flex-wrap: wrap;
+  }
+  button {
+    background: transparent;
+    color: var(--ink);
+    border: 1px solid rgba(255,255,255,0.35);
+    padding: 8px 14px;
+    font-size: 13px;
+    font-family: inherit;
+    cursor: pointer;
+  }
+  button:hover { background: rgba(255,255,255,0.09); }
+  button:focus-visible { outline: 2px solid var(--glucose); outline-offset: 2px; }
+  .hint {
+    color: var(--ink-dim);
+    font-size: 13px;
+    margin-left: 4px;
+  }
+  .notes {
+    margin: 24px 0 0;
+    color: var(--ink-dim);
+    font-size: 13.5px;
+    line-height: 1.65;
+    max-width: 74ch;
+  }
+  .notes b { color: var(--ink); font-weight: 500; }
+  .notes a { color: var(--ink-dim); }
+  @media (max-width: 720px) {
+    .wrap { padding: 16px 10px 32px; }
+    h1 { font-size: 18px; }
+    .chart-box { height: 76dvh; padding: 8px 6px 10px; }
+    .hint { margin-left: 0; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>Нора — кръвна захар, инсулин и хранене</h1>
+  <p class="sub" id="sub">зареждане…</p>
+
+  <div class="chart-box">
+    <canvas id="chart"></canvas>
+  </div>
+
+  <div class="controls">
+    <button id="reset">Целия период</button>
+    <button id="lastweek">Последните 7 дни</button>
+    <button id="last3">Последните 3 дни</button>
+    <span class="hint">Колелцето мащабира, влаченето мести графиката настрани.</span>
+  </div>
+
+  <div class="notes">
+    <p><b>Кръвна захар</b> (червена линия, лява скала) в mmol/L. Стойност „HI“ означава над обхвата на уреда; нанася се на 30 с празна точка, за да не се чете като нормално измерване.</p>
+    <p><b>Инсулин</b> (сини стълбчета, дясна скала) в единици. Липсващо стълбче означава, че не е поставен инсулин.</p>
+    <p><b>Хранене</b> (жълти стълбчета под нулата) отбелязва само, че е имало хранене — височината им няма стойност.</p>
+    <p><b>Зелената ивица 4.5–14 mmol/L</b> е общ ориентир по препоръките на ISFM за котки на инсулин — надир 4.5–8.0 и пик 10–14 mmol/L. Това не е предписан от д-р Варадинова диапазон; ако тя работи с други граници, ивицата може да се промени. Червеният фон над и под нея отбелязва стойностите извън ориентира.</p>
+    <p>Всяко измерване предхожда инсулина и храненето, така че всички стойности са преди дозата. Бележки към отделни измервания (смяна на график, промяна на доза) се показват при посочване на точката.</p>
+    <p>От 12.09 стойностите идват от глюкомера Accu-Chek Instant с точното му време; преди това са от ръчните записки.</p>
+    <p>При по-малък мащаб част от числата се скриват, за да не се застъпват — приближете, за да се покажат всички.</p>
+  </div>
+
+</div>
+
+<script>
+const FOOD_DEPTH  = 1.6;
+const TARGET_LOW  = 4.5;
+const TARGET_HIGH = 14;
+const DAY_MS      = 86400000;
+const HI_PLOT     = 30;
+
+const css = getComputedStyle(document.documentElement);
+const readVar = n => css.getPropertyValue(n).trim();
+
+function parseCsv(text) {
+  const lines = text.trim().split(/\r?\n/);
+  const head = lines.shift().split(",");
+  return lines.filter(l => l.trim()).map(line => {
+    const cells = [];
+    let cur = "", q = false;
+    for (const ch of line) {
+      if (ch === '"') q = !q;
+      else if (ch === "," && !q) { cells.push(cur); cur = ""; }
+      else cur += ch;
+    }
+    cells.push(cur);
+    const r = Object.fromEntries(head.map((h, i) => [h, (cells[i] ?? "").trim()]));
+    return {
+      x: r.date + "T" + r.time,
+      hi: r.glucose.toUpperCase() === "HI",
+      glucose: r.glucose.toUpperCase() === "HI" ? HI_PLOT : parseFloat(r.glucose),
+      insulin: parseInt(r.insulin, 10) || 0,
+      food: r.food === "1" || r.food.toLowerCase() === "yes",
+      note: r.note || ""
+    };
+  }).sort((a, b) => a.x.localeCompare(b.x));
+}
+
+const backdrop = {
+  id: "backdrop",
+  beforeDatasetsDraw(chart) {
+    const { ctx, chartArea: area, scales } = chart;
+    const x = scales.x, y = scales.y;
+    if (!x || !y) return;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(area.left, area.top, area.right - area.left, area.bottom - area.top);
+    ctx.clip();
+
+    const firstMidnight = new Date(x.min).setHours(0, 0, 0, 0);
+    let i = 0;
+    for (let t = firstMidnight; t < x.max + DAY_MS; t += DAY_MS, i++) {
+      const px0 = x.getPixelForValue(t);
+      const px1 = x.getPixelForValue(t + DAY_MS);
+      if (i % 2 === 1) {
+        ctx.fillStyle = readVar("--dayband");
+        ctx.fillRect(px0, area.top, px1 - px0, area.bottom - area.top);
+      }
+      ctx.strokeStyle = readVar("--daysplit");
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(Math.round(px0) + 0.5, area.top);
+      ctx.lineTo(Math.round(px0) + 0.5, area.bottom);
+      ctx.stroke();
+    }
+
+    const yHigh = y.getPixelForValue(TARGET_HIGH);
+    const yLow  = y.getPixelForValue(TARGET_LOW);
+    const yZero = y.getPixelForValue(0);
+    const w = area.right - area.left;
+    ctx.fillStyle = readVar("--outfill");
+    ctx.fillRect(area.left, area.top, w, yHigh - area.top);
+    ctx.fillRect(area.left, yLow, w, yZero - yLow);
+    ctx.fillStyle = readVar("--targetfill");
+    ctx.fillRect(area.left, yHigh, w, yLow - yHigh);
+
+    ctx.strokeStyle = readVar("--targetline");
+    ctx.setLineDash([6, 4]);
+    [yHigh, yLow].forEach(py => {
+      ctx.beginPath();
+      ctx.moveTo(area.left, Math.round(py) + 0.5);
+      ctx.lineTo(area.right, Math.round(py) + 0.5);
+      ctx.stroke();
+    });
+    ctx.setLineDash([]);
+    ctx.fillStyle = readVar("--targetline");
+    ctx.font = '10px "Segoe UI", Roboto, system-ui, sans-serif';
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    ctx.fillText("ориентир " + TARGET_LOW + " – " + TARGET_HIGH, area.left + 6, yHigh + 4);
+    ctx.restore();
+  }
+};
+
+const valueLabels = {
+  id: "valueLabels",
+  afterDatasetsDraw(chart) {
+    const ctx = chart.ctx, area = chart.chartArea;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(area.left - 20, area.top - 14, area.right - area.left + 40, area.bottom - area.top + 28);
+    ctx.clip();
+    ctx.font = '11px "Segoe UI", Roboto, system-ui, sans-serif';
+    ctx.textAlign = "center";
+    ctx.textBaseline = "bottom";
+    chart.data.datasets.forEach((ds, di) => {
+      const meta = chart.getDatasetMeta(di);
+      if (meta.hidden) return;
+      const isGlucose = ds.label.startsWith("Кръвна");
+      const isInsulin = ds.label.startsWith("Инсулин");
+      if (!isGlucose && !isInsulin) return;
+      ctx.fillStyle = readVar(isGlucose ? "--glucose" : "--insulin");
+      const minGap = isGlucose ? 32 : 20;
+      let lastX = -Infinity;
+      meta.data.forEach((el, i) => {
+        if (el.x - lastX < minGap) return;
+        if (el.x < area.left - 10 || el.x > area.right + 10) return;
+        const d = ds.data[i];
+        const txt = isGlucose ? (d.hi ? "HI" : d.y.toFixed(1)) : String(d.y);
+        ctx.fillText(txt, el.x, el.y - (isGlucose ? 8 : 4));
+        lastX = el.x;
+      });
+    });
+    ctx.restore();
+  }
+};
+
+function build(rows) {
+  const glucose = rows.map(r => ({ x: r.x, y: r.glucose, hi: r.hi, note: r.note }));
+  const insulin = rows.filter(r => r.insulin > 0).map(r => ({ x: r.x, y: r.insulin }));
+  const food    = rows.filter(r => r.food).map(r => ({ x: r.x, y: -FOOD_DEPTH }));
+
+  const first = new Date(rows[0].x), last = new Date(rows[rows.length - 1].x);
+  const dayStart = d => new Date(d).setHours(0, 0, 0, 0);
+  const xMin = dayStart(first);
+  const xMax = dayStart(last) + DAY_MS;
+  const fmt = d => d.toLocaleDateString("bg-BG", { day: "numeric", month: "long" });
+  document.getElementById("sub").textContent =
+    fmt(first) + " – " + fmt(last) + " " + last.getFullYear() + " г. · " + rows.length + " измервания";
+
+  const chart = new Chart(document.getElementById("chart"), {
+    plugins: [backdrop, valueLabels],
+    data: {
+      datasets: [
+        {
+          type: "line", label: "Кръвна захар (mmol/L)", data: glucose, yAxisID: "y",
+          borderColor: readVar("--glucose"), borderWidth: 2, tension: 0,
+          pointRadius: c => c.raw.hi ? 6 : 3, pointHoverRadius: 7,
+          pointBackgroundColor: c => c.raw.hi ? readVar("--panel") : readVar("--glucose"),
+          pointBorderColor: readVar("--glucose"), pointBorderWidth: 2, order: 1
+        },
+        { type: "bar", label: "Инсулин (единици)", data: insulin, yAxisID: "y2",
+          backgroundColor: readVar("--insulin"), barThickness: 9, order: 3 },
+        { type: "bar", label: "Хранене", data: food, yAxisID: "y2",
+          backgroundColor: readVar("--food"), barThickness: 9, order: 3 }
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      interaction: { mode: "nearest", axis: "x", intersect: false },
+      scales: {
+        x: {
+          type: "time",
+          time: { unit: "day", tooltipFormat: "dd.MM.yyyy HH:mm",
+                  displayFormats: { day: "dd.MM", hour: "dd.MM HH:mm" } },
+          grid: { display: false }, border: { color: readVar("--ink") },
+          ticks: { color: readVar("--ink"), maxRotation: 0, autoSkipPadding: 16 }
+        },
+        y: {
+          position: "left", min: -6, max: 33,
+          title: { display: true, text: "Кръвна захар (mmol/L)", color: readVar("--glucose") },
+          grid: { color: c => c.tick.value === 0 ? readVar("--ink") : readVar("--grid") },
+          border: { color: readVar("--ink") },
+          ticks: { color: readVar("--ink"), stepSize: 5, callback: v => (v < 0 ? "" : v) }
+        },
+        y2: {
+          position: "right", min: -6, max: 33,
+          title: { display: true, text: "Инсулин (единици)", color: readVar("--insulin") },
+          grid: { drawOnChartArea: false }, border: { color: readVar("--ink") },
+          ticks: { color: readVar("--ink"), stepSize: 1, callback: v => (v >= 0 && v <= 6 ? v : "") }
+        }
+      },
+      plugins: {
+        legend: { labels: { color: readVar("--ink"), boxWidth: 14, padding: 14 } },
+        tooltip: {
+          backgroundColor: "#1c1c1c", borderColor: "rgba(255,255,255,0.25)", borderWidth: 1,
+          titleColor: readVar("--ink"), bodyColor: readVar("--ink"),
+          callbacks: {
+            label: c => {
+              if (c.dataset.label === "Хранене") return "Хранене: да";
+              if (c.dataset.label.startsWith("Кръвна")) {
+                return c.raw.hi ? "Кръвна захар: HI (над обхвата)"
+                                : "Кръвна захар: " + c.parsed.y + " mmol/L";
+              }
+              return "Инсулин: " + c.parsed.y + " ед.";
+            },
+            afterBody: items => {
+              const g = items.find(i => i.dataset.label.startsWith("Кръвна"));
+              return g && g.raw.note ? ["", g.raw.note] : [];
+            }
+          }
+        },
+        zoom: {
+          pan: { enabled: true, mode: "x" },
+          zoom: { wheel: { enabled: true }, pinch: { enabled: true }, mode: "x" },
+          limits: { x: { min: xMin, max: xMax, minRange: 6 * 3600 * 1000 } }
+        }
+      }
+    }
+  });
+
+  const span = (from, to) => chart.zoomScale("x", { min: from, max: to }, "default");
+  document.getElementById("reset").onclick    = () => chart.resetZoom();
+  document.getElementById("lastweek").onclick = () => span(xMax - 8 * DAY_MS, xMax);
+  document.getElementById("last3").onclick    = () => span(xMax - 3 * DAY_MS, xMax);
+  if (window.matchMedia("(max-width: 720px)").matches) span(xMax - 3 * DAY_MS, xMax);
+}
+
+fetch("nora.csv?t=" + Date.now(), { cache: "no-store" })
+  .then(r => { if (!r.ok) throw new Error(r.status); return r.text(); })
+  .then(t => build(parseCsv(t)))
+  .catch(err => {
+    document.getElementById("sub").textContent =
+      "Данните не можаха да се заредят (nora.csv). Страницата трябва да е отворена от уеб адрес, не от локален файл.";
+    console.error(err);
+  });
+</script>
+</body>
+</html>
